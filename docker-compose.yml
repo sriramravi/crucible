@@ -1,0 +1,159 @@
+version: "3.9"
+
+networks:
+  crucible_network:
+    name: crucible_network
+    driver: bridge
+
+volumes:
+  postgres_data:
+  gitea_data:
+  jenkins_data:
+  nexus_data:
+
+services:
+  # ─── Database ────────────────────────────────────────────────────────────────
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: dsolab
+      POSTGRES_PASSWORD: dsolab
+      POSTGRES_DB: dsolab
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - crucible_network
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U dsolab"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ─── Backend API ──────────────────────────────────────────────────────────────
+  backend:
+    build: ./backend
+    environment:
+      DATABASE_URL: postgresql+asyncpg://dsolab:dsolab@postgres:5432/dsolab
+      SYNC_DATABASE_URL: postgresql://dsolab:dsolab@postgres:5432/dsolab
+      GITEA_URL: http://gitea:3000
+      GITEA_ADMIN_TOKEN: ${GITEA_ADMIN_TOKEN:-gitea-admin-token}
+      GITEA_ADMIN_USER: ${GITEA_ADMIN_USER:-gitea_admin}
+      JENKINS_URL: http://jenkins:8080
+      NEXUS_URL: http://nexus:8081
+      JUICE_SHOP_URL: http://juice-shop:3000
+      DOCKER_SOCKET: unix:///var/run/docker.sock
+      CONTAINER_NETWORK: crucible_network
+      SECRET_KEY: ${SECRET_KEY:-change-me-in-production-secret-key-32chars}
+      ALLOWED_ORIGINS: '["http://localhost:3001","http://frontend:3001"]'
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    ports:
+      - "8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - crucible_network
+    restart: unless-stopped
+
+  # ─── Frontend ─────────────────────────────────────────────────────────────────
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    environment:
+      NEXT_PUBLIC_API_URL: http://localhost:8000/api/v1
+    ports:
+      - "3001:3001"
+    depends_on:
+      - backend
+    networks:
+      - crucible_network
+    restart: unless-stopped
+
+  # ─── Gitea ────────────────────────────────────────────────────────────────────
+  gitea:
+    image: gitea/gitea:latest
+    environment:
+      GITEA__database__DB_TYPE: postgres
+      GITEA__database__HOST: postgres:5432
+      GITEA__database__NAME: gitea
+      GITEA__database__USER: dsolab
+      GITEA__database__PASSWD: dsolab
+      GITEA__server__HTTP_PORT: "3000"
+      GITEA__server__DOMAIN: localhost
+      GITEA__server__ROOT_URL: http://localhost:3000
+      GITEA__actions__ENABLED: "true"
+      GITEA__security__INSTALL_LOCK: "true"
+      GITEA__service__DISABLE_REGISTRATION: "false"
+      GITEA__admin__DEFAULT_EMAIL_NOTIFICATIONS: "disabled"
+    volumes:
+      - gitea_data:/data
+    ports:
+      - "3000:3000"
+      - "2222:22"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - crucible_network
+    restart: unless-stopped
+
+  # ─── Gitea Act Runner ──────────────────────────────────────────────────────────
+  act-runner:
+    image: gitea/act_runner:latest
+    environment:
+      GITEA_INSTANCE_URL: http://gitea:3000
+      GITEA_RUNNER_REGISTRATION_TOKEN: ${ACT_RUNNER_TOKEN:-act-runner-token}
+      GITEA_RUNNER_NAME: crucible-runner
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    depends_on:
+      - gitea
+    networks:
+      - crucible_network
+    restart: unless-stopped
+
+  # ─── Jenkins ──────────────────────────────────────────────────────────────────
+  jenkins:
+    image: jenkins/jenkins:lts-jdk17
+    user: root
+    environment:
+      JAVA_OPTS: "-Djenkins.install.runSetupWizard=false"
+      JENKINS_OPTS: ""
+    volumes:
+      - jenkins_data:/var/jenkins_home
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ./infrastructure/jenkins/init.groovy.d:/var/jenkins_home/init.groovy.d
+    ports:
+      - "8080:8080"
+      - "50000:50000"
+    networks:
+      - crucible_network
+    restart: unless-stopped
+
+  # ─── Nexus ────────────────────────────────────────────────────────────────────
+  nexus:
+    image: sonatype/nexus3:latest
+    volumes:
+      - nexus_data:/nexus-data
+    ports:
+      - "8081:8081"
+    networks:
+      - crucible_network
+    restart: unless-stopped
+    ulimits:
+      nofile:
+        soft: 65536
+        hard: 65536
+
+  # ─── OWASP Juice Shop ─────────────────────────────────────────────────────────
+  juice-shop:
+    image: bkimminich/juice-shop:latest
+    ports:
+      - "3002:3000"
+    networks:
+      - crucible_network
+    restart: unless-stopped
