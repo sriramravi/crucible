@@ -11,8 +11,8 @@ class Settings(BaseSettings):
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 60 * 8  # 8 hours
 
     # Database
-    DATABASE_URL: str = "postgresql+asyncpg://dsolab:dsolab@localhost:5432/dsolab"
-    SYNC_DATABASE_URL: str = "postgresql://dsolab:dsolab@localhost:5432/dsolab"
+    DATABASE_URL: str = "postgresql+asyncpg://crucible:crucible@localhost:5432/crucible"
+    SYNC_DATABASE_URL: str = "postgresql://crucible:crucible@localhost:5432/crucible"
 
     # Gitea
     GITEA_URL: str = "http://localhost:3000"
